@@ -137,11 +137,40 @@ func (c cachedArticles) fresh(now time.Time, cacheHours int) bool {
 	return now.Sub(c.FetchedAt) < time.Duration(cacheHours)*time.Hour
 }
 
-// parseIntSetting reads a positive integer setting with a default.
-func parseIntSetting(s string, def int) int {
+// failureBackoff is how long render_page avoids a synchronous fetch after
+// one has failed, so a Semantic Scholar outage does not turn every page
+// view into a slow (or, on transport errors, aborted) request.
+const failureBackoff = 10 * time.Minute
+
+// shouldFetch decides whether render_page fetches synchronously: only when
+// there is no cache at all (a stale cache is served as-is; the job refreshes
+// it) and no fetch has failed within failureBackoff.
+func shouldFetch(have bool, lastFailure, now time.Time) bool {
+	if have {
+		return false
+	}
+	return lastFailure.IsZero() || now.Sub(lastFailure) >= failureBackoff
+}
+
+// staleFor decides whether the refresh job fetches: when there is no cache
+// or it is older than cacheHours.
+func staleFor(cache cachedArticles, have bool, now time.Time, cacheHours int) bool {
+	return !have || !cache.fresh(now, cacheHours)
+}
+
+// maxArticleLimit caps article_limit: more than this is never useful on a
+// page and bounds the render_page payload.
+const maxArticleLimit = 500
+
+// parseIntSetting reads a positive integer setting with a default, capped
+// at max when max > 0.
+func parseIntSetting(s string, def, max int) int {
 	n, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil || n <= 0 {
 		return def
+	}
+	if max > 0 && n > max {
+		return max
 	}
 	return n
 }

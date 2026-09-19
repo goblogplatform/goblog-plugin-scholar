@@ -7,6 +7,6 @@
   "runtime": "wasm",
   "entry": "plugin.wasm",
   "allowed_hosts": ["api.semanticscholar.org"],
-  "min_goblog_version": "0.2.9",
+  "min_goblog_version": "0.3.0",
   "homepage": "https://github.com/goblogplatform/goblog-plugin-scholar"
 }

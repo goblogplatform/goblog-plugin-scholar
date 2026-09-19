@@ -26,6 +26,10 @@ func TestParsePapersPage(t *testing.T) {
 	if page.Articles[1].Journal != "" {
 		t.Errorf("no journal/venue should be empty, got %q", page.Articles[1].Journal)
 	}
+	venueOnly, err := parsePapersPage([]byte(`{"data":[{"title":"v","venue":"Conf V","journal":null}]}`))
+	if err != nil || len(venueOnly.Articles) != 1 || venueOnly.Articles[0].Journal != "Conf V" {
+		t.Errorf("venue fallback: %+v %v", venueOnly, err)
+	}
 	if _, err := parsePapersPage([]byte("{")); err == nil {
 		t.Error("bad JSON should error")
 	}
@@ -59,8 +63,11 @@ func TestRenderArticlesHTML(t *testing.T) {
 	if strings.Contains(html, "javascript:") {
 		t.Error("unsafe URL must not be linked")
 	}
-	if safeHref("ftp://x") != "" || safeHref("https://ok.test/a?b=1") != "https://ok.test/a?b=1" {
+	if safeHref("ftp://x") != "" || safeHref("https:///x") != "" || safeHref("https://ok.test/a?b=1") != "https://ok.test/a?b=1" {
 		t.Error("safeHref rules")
+	}
+	if got := renderArticlesHTML([]Article{{Title: "Bare"}}); got != `<div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid #eee;"><div>Bare</div></div>` {
+		t.Errorf("title-only article = %q", got)
 	}
 }
 
@@ -73,7 +80,47 @@ func TestCacheFreshness(t *testing.T) {
 	if (cachedArticles{}).fresh(now, 24) {
 		t.Error("zero FetchedAt is never fresh")
 	}
-	if parseIntSetting("", 50) != 50 || parseIntSetting("7", 50) != 7 || parseIntSetting("x", 50) != 50 || parseIntSetting("0", 50) != 50 {
+	if parseIntSetting("", 50, 0) != 50 || parseIntSetting("7", 50, 0) != 7 || parseIntSetting("x", 50, 0) != 50 || parseIntSetting("0", 50, 0) != 50 {
 		t.Error("parseIntSetting")
+	}
+	if parseIntSetting("9999", 50, maxArticleLimit) != 500 || parseIntSetting("500", 50, maxArticleLimit) != 500 || parseIntSetting("9999", 24, 0) != 9999 {
+		t.Error("parseIntSetting cap")
+	}
+}
+
+func TestShouldFetch(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	// any cache, fresh or stale, means render never fetches
+	if shouldFetch(true, time.Time{}, now) {
+		t.Error("cached: must not fetch")
+	}
+	if !shouldFetch(false, time.Time{}, now) {
+		t.Error("no cache, never failed: must fetch")
+	}
+	if shouldFetch(false, now.Add(-time.Minute), now) {
+		t.Error("failed 1 min ago: must back off")
+	}
+	if !shouldFetch(false, now.Add(-failureBackoff), now) {
+		t.Error("failed exactly failureBackoff ago: may retry")
+	}
+	if !shouldFetch(false, now.Add(-time.Hour), now) {
+		t.Error("failed an hour ago: may retry")
+	}
+}
+
+func TestStaleFor(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	c := cachedArticles{FetchedAt: now.Add(-2 * time.Hour)}
+	if !staleFor(cachedArticles{}, false, now, 24) {
+		t.Error("no cache is stale")
+	}
+	if staleFor(c, true, now, 24) {
+		t.Error("2h old with 24h window is not stale")
+	}
+	if !staleFor(c, true, now, 1) {
+		t.Error("2h old with 1h window is stale")
+	}
+	if !staleFor(cachedArticles{}, true, now, 24) {
+		t.Error("cache with zero fetched_at is stale")
 	}
 }

@@ -1,8 +1,10 @@
 //go:build wasip1
 
 // Scholar Publications is a goblog WebAssembly plugin: it serves a Research
-// page listing an author's publications from Semantic Scholar, cached in the
-// plugin store and refreshed by an hourly job once the cache is stale.
+// page listing an author's publications from Semantic Scholar. The page is
+// served from the plugin store; an hourly job re-fetches once the cache is
+// older than cache_hours, and the page only fetches itself when the store
+// is empty.
 //
 // Build:  GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -ldflags="-s -w" -o plugin.wasm .
 // Every export takes JSON on stdin (pdk.Input) and returns JSON (pdk.Output).
@@ -95,8 +97,8 @@ func settings() int32 {
 		{Key: "enabled", Type: "text", Default: "false", Label: "Enabled", Description: "Set to 'true' to enable the Research page"},
 		{Key: "semantic_scholar_id", Type: "text", Default: "", Label: "Semantic Scholar Author ID", Description: "The number at the end of your semanticscholar.org author URL (e.g. 1792904)"},
 		{Key: "semantic_scholar_api_key", Type: "text", Default: "", Label: "Semantic Scholar API Key", Description: "Optional; raises the API rate limit"},
-		{Key: "article_limit", Type: "text", Default: "50", Label: "Article Limit", Description: "Maximum number of publications to show"},
-		{Key: "cache_hours", Type: "text", Default: "24", Label: "Cache Hours", Description: "How long fetched publications are reused before refreshing"},
+		{Key: "article_limit", Type: "text", Default: "50", Label: "Article Limit", Description: "Maximum number of publications to show (newest first, at most 500)"},
+		{Key: "cache_hours", Type: "text", Default: "24", Label: "Cache Hours", Description: "How long fetched publications are reused before the hourly job refreshes them (0 or invalid means the default of 24)"},
 	})
 }
 
@@ -123,26 +125,35 @@ func loadCache() (cachedArticles, bool) {
 	return c, true
 }
 
-// refresh fetches and stores when the cache is missing or stale. It returns
-// the articles to render (fresh, newly fetched, or stale-as-fallback) and
-// whether any are available.
-func refresh(settings map[string]string, force bool) ([]Article, bool) {
-	id := settings["semantic_scholar_id"]
-	if id == "" {
-		return nil, false
+// lastFailure is the negative cache: when the most recent fetch failed.
+type lastFailure struct {
+	FailedAt time.Time `json:"failed_at"`
+}
+
+func loadLastFailure() time.Time {
+	b, ok := storeGet("last_failure")
+	if !ok {
+		return time.Time{}
 	}
-	hours := parseIntSetting(settings["cache_hours"], 24)
-	limit := parseIntSetting(settings["article_limit"], 50)
-	cache, have := loadCache()
-	if have && !force && cache.fresh(time.Now(), hours) {
-		return cache.Articles, true
+	var f lastFailure
+	if err := json.Unmarshal(b, &f); err != nil {
+		return time.Time{}
 	}
-	articles, err := fetchAll(pdkGet, id, settings["semantic_scholar_api_key"], limit)
+	return f.FailedAt
+}
+
+// fetchAndStore fetches the author's papers and replaces the cache. On
+// failure it logs, records last_failure and returns false. Note that a
+// transport-level failure (DNS, refused connection, TLS) never returns at
+// all: Extism's http_request aborts the guest call, which is why render_page
+// only fetches when it has nothing to show.
+func fetchAndStore(settings map[string]string) ([]Article, bool) {
+	limit := parseIntSetting(settings["article_limit"], 50, maxArticleLimit)
+	articles, err := fetchAll(pdkGet, settings["semantic_scholar_id"], settings["semantic_scholar_api_key"], limit)
 	if err != nil {
 		pdk.Log(pdk.LogWarn, "semantic scholar fetch failed: "+err.Error())
-		if have {
-			return cache.Articles, true // stale beats nothing
-		}
+		b, _ := json.Marshal(lastFailure{FailedAt: time.Now()})
+		storeSet("last_failure", b)
 		return nil, false
 	}
 	b, _ := json.Marshal(cachedArticles{FetchedAt: time.Now(), Articles: articles})
@@ -150,6 +161,31 @@ func refresh(settings map[string]string, force bool) ([]Article, bool) {
 		pdk.Log(pdk.LogWarn, "could not store the publications cache")
 	}
 	return articles, true
+}
+
+// loadOrFetch is render_page's strategy: serve whatever is cached, fresh or
+// stale, and fetch synchronously only when there is no cache at all and no
+// fetch failed in the last failureBackoff.
+func loadOrFetch(settings map[string]string) ([]Article, bool) {
+	cache, have := loadCache()
+	if have {
+		return cache.Articles, true
+	}
+	if !shouldFetch(have, loadLastFailure(), time.Now()) {
+		return nil, false
+	}
+	return fetchAndStore(settings)
+}
+
+// refreshIfStale is the job's strategy: re-fetch once the cache is older
+// than cache_hours (or missing). It has the 120 s job budget and its
+// failures are only logged, so it is where slow or failing fetches belong.
+func refreshIfStale(settings map[string]string) {
+	hours := parseIntSetting(settings["cache_hours"], 24, 0)
+	cache, have := loadCache()
+	if staleFor(cache, have, time.Now(), hours) {
+		fetchAndStore(settings)
+	}
 }
 
 //go:wasmexport render_page
@@ -165,7 +201,7 @@ func renderPage() int32 {
 	if in.Settings["semantic_scholar_id"] == "" {
 		return outputJSON(map[string]any{"html": noIDHTML})
 	}
-	articles, ok := refresh(in.Settings, false)
+	articles, ok := loadOrFetch(in.Settings)
 	if !ok {
 		return outputJSON(map[string]any{"html": unavailableHTML})
 	}
@@ -180,7 +216,7 @@ func runJob() int32 {
 		return 1
 	}
 	if in.Name == "refresh" && in.Settings["semantic_scholar_id"] != "" {
-		refresh(in.Settings, false) // only fetches when stale
+		refreshIfStale(in.Settings)
 	}
 	return outputJSON(map[string]any{})
 }

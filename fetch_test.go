@@ -57,4 +57,22 @@ func TestFetchAll(t *testing.T) {
 	if as, err := fetchAll(noKey, "123", "", 5); err != nil || len(as) != 0 {
 		t.Errorf("empty author: %v %v", as, err)
 	}
+	// a "next" that never ends stops after maxPages
+	endless := 0
+	forever := func(string, map[string]string) (int, []byte, error) {
+		endless++
+		return 200, []byte(`{"next":1,"data":[{"title":"x"}]}`), nil
+	}
+	if as, err := fetchAll(forever, "123", "", 1000); err != nil || endless != maxPages || len(as) != maxPages {
+		t.Errorf("endless pagination: %d calls, %d articles, %v", endless, len(as), err)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("héllo wörld", 5); got != "héllo…" {
+		t.Errorf("truncate on rune boundary = %q", got)
+	}
+	if got := truncate("short", 10); got != "short" {
+		t.Errorf("truncate no-op = %q", got)
+	}
 }
