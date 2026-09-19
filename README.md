@@ -18,7 +18,7 @@ Under **Admin → Settings → Scholar Publications**:
 | `article_limit` | `50` | Maximum number of publications to show (the newest N; at most 500) |
 | `cache_hours` | `24` | How long fetched publications are reused before the hourly job refreshes them (`0` or anything invalid means the default) |
 
-Installs upgrading from goblog's compiled-in scholar plugin keep their `enabled`, `semantic_scholar_id`, `semantic_scholar_api_key` and `article_limit` values. Google Scholar is no longer supported, so the old `source` and `scholar_id` settings are ignored, as are `profile_cache` and `article_cache` (the cache now lives in goblog's database).
+If you are upgrading from goblog's compiled-in scholar plugin, your existing `enabled`, `semantic_scholar_id`, `semantic_scholar_api_key` and `article_limit` settings carry over. Google Scholar is no longer supported, so the old `source` and `scholar_id` settings are ignored, as are `profile_cache` and `article_cache` (the cache now lives in goblog's database).
 
 ## How it works
 
