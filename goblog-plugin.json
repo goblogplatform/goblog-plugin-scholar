@@ -1,0 +1,12 @@
+{
+  "name": "scholar",
+  "display_name": "Scholar Publications",
+  "description": "A Research page listing your publications from Semantic Scholar, with citation counts, cached and refreshed daily.",
+  "author": "Jason Ernst",
+  "license": "Apache-2.0",
+  "runtime": "wasm",
+  "entry": "plugin.wasm",
+  "allowed_hosts": ["api.semanticscholar.org"],
+  "min_goblog_version": "0.3.0",
+  "homepage": "https://github.com/goblogplatform/goblog-plugin-scholar"
+}
